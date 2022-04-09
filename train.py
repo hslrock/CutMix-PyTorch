@@ -4,6 +4,7 @@ import argparse
 import os
 import shutil
 import time
+import torch.fft as fft
 
 import torch
 import torch.nn as nn
@@ -21,7 +22,8 @@ import utils
 import numpy as np
 
 import warnings
-
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 warnings.filterwarnings("ignore")
 
 model_names = sorted(name for name in models.__dict__
@@ -30,14 +32,14 @@ model_names = sorted(name for name in models.__dict__
 
 parser = argparse.ArgumentParser(description='Cutmix PyTorch CIFAR-10, CIFAR-100 and ImageNet-1k Training')
 parser.add_argument('--net_type', default='pyramidnet', type=str,
-                    help='networktype: resnet, and pyamidnet')
+                    help='networktype: resnet, and pyramidnet')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
-parser.add_argument('--epochs', default=90, type=int, metavar='N',
+parser.add_argument('--epochs', default=300, type=int, metavar='N',
                     help='number of total epochs to run')
-parser.add_argument('-b', '--batch_size', default=128, type=int,
+parser.add_argument('-b', '--batch_size', default=8, type=int,
                     metavar='N', help='mini-batch size (default: 256)')
-parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+parser.add_argument('--lr', '--learning-rate', default=0.25, type=float,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
@@ -45,21 +47,21 @@ parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)')
 parser.add_argument('--print-freq', '-p', default=1, type=int,
                     metavar='N', help='print frequency (default: 10)')
-parser.add_argument('--depth', default=32, type=int,
+parser.add_argument('--depth', default=110, type=int,
                     help='depth of the network (default: 32)')
 parser.add_argument('--no-bottleneck', dest='bottleneck', action='store_false',
                     help='to use basicblock for CIFAR datasets (default: bottleneck)')
-parser.add_argument('--dataset', dest='dataset', default='imagenet', type=str,
-                    help='dataset (options: cifar10, cifar100, and imagenet)')
-parser.add_argument('--no-verbose', dest='verbose', action='store_false',
+parser.add_argument('--dataset', dest='dataset', default='stl10', type=str,
+                    help='dataset (options: cifar10, cifar100,stl10 and imagenet)')
+parser.add_argument('--no-verbose', dest='', action='store_false',
                     help='to print the status at every iteration')
-parser.add_argument('--alpha', default=300, type=float,
+parser.add_argument('--alpha', default=64, type=float,
                     help='number of new channel increases per depth (default: 300)')
-parser.add_argument('--expname', default='TEST', type=str,
+parser.add_argument('--expname', default='CUTFREQ_STL10', type=str,
                     help='name of experiment')
-parser.add_argument('--beta', default=0, type=float,
+parser.add_argument('--beta', default=1.0, type=float,
                     help='hyperparameter beta')
-parser.add_argument('--cutmix_prob', default=0, type=float,
+parser.add_argument('--cutmix_prob', default=0.5, type=float,
                     help='cutmix probability')
 
 parser.set_defaults(bottleneck=True)
@@ -73,12 +75,12 @@ def main():
     global args, best_err1, best_err5
     args = parser.parse_args()
 
-    if args.dataset.startswith('cifar'):
+    if args.dataset.startswith('cifar') or args.dataset.startswith('stl'):
         normalize = transforms.Normalize(mean=[x / 255.0 for x in [125.3, 123.0, 113.9]],
                                          std=[x / 255.0 for x in [63.0, 62.1, 66.7]])
 
         transform_train = transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
+            transforms.RandomCrop(92, padding=4),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize,
@@ -88,6 +90,7 @@ def main():
             transforms.ToTensor(),
             normalize
         ])
+        print(args.dataset)
 
         if args.dataset == 'cifar100':
             train_loader = torch.utils.data.DataLoader(
@@ -103,6 +106,14 @@ def main():
                 batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True)
             val_loader = torch.utils.data.DataLoader(
                 datasets.CIFAR10('../data', train=False, transform=transform_test),
+                batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True)
+            numberofclass = 10
+        elif args.dataset == 'stl10':
+            train_loader = torch.utils.data.DataLoader(
+                datasets.STL10(root="../data",split ='train',transform=transform_train,download=True),
+                batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True)
+            val_loader = torch.utils.data.DataLoader(
+                datasets.STL10(root="../data",split ='test',transform=transform_test,download=True),
                 batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True)
             numberofclass = 10
         else:
@@ -157,8 +168,10 @@ def main():
     if args.net_type == 'resnet':
         model = RN.ResNet(args.dataset, args.depth, numberofclass, args.bottleneck)  # for ResNet
     elif args.net_type == 'pyramidnet':
+        print("hi")
         model = PYRM.PyramidNet(args.dataset, args.depth, args.alpha, numberofclass,
                                 args.bottleneck)
+        print(model)
     else:
         raise Exception('unknown network architecture: {}'.format(args.net_type))
 
@@ -203,7 +216,23 @@ def main():
         }, is_best)
 
     print('Best accuracy (top-1 and 5 error):', best_err1, best_err5)
+def pass_torch(input, limit,high=False):
+    with torch.no_grad():
+        pass1 = torch.abs(fft.rfftfreq(input.shape[-1])) 
+        pass1_thresh=max(pass1*limit)
+        pass1 =pass1<pass1_thresh
+        pass2 = torch.abs(fft.fftfreq(input.shape[-2]))
+        pass2_thresh=max(pass2*limit)
+        pass2 =pass2<pass2_thresh
 
+
+        kernel = torch.outer(pass2, pass1)
+        kernel=kernel.cuda()
+        if high:
+            kernel=~kernel
+        fft_input = fft.rfft2(input)
+    return fft.irfft2(fft_input * kernel,input.shape[-2:])
+        
 
 def train(train_loader, model, criterion, optimizer, epoch):
     batch_time = AverageMeter()
@@ -225,22 +254,30 @@ def train(train_loader, model, criterion, optimizer, epoch):
         target = target.cuda()
 
         r = np.random.rand(1)
+        cut_index=np.random.rand(1)*0.2
         if args.beta > 0 and r < args.cutmix_prob:
             # generate mixed sample
+            low_filt_img=pass_torch(input,cut_index,high=False)
+            high_filt_img=pass_torch(input,cut_index,high=True)
+    
             lam = np.random.beta(args.beta, args.beta)
+            lam=0.5
             rand_index = torch.randperm(input.size()[0]).cuda()
             target_a = target
             target_b = target[rand_index]
             bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
-            input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
+            #input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
+            low_filt_img[:, :, bbx1:bbx2, bby1:bby2] = high_filt_img[rand_index, :, bbx1:bbx2, bby1:bby2]
             # adjust lambda to exactly match pixel ratio
             lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
             # compute output
-            output = model(input)
-            loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
+            output = model(low_filt_img)
+            #loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
+            loss = criterion(output, target_a)  + criterion(output, target_b) 
         else:
             # compute output
             output = model(input)
+            #print(output.shape)
             loss = criterion(output, target)
 
         # measure accuracy and record loss
@@ -368,7 +405,7 @@ class AverageMeter(object):
 
 def adjust_learning_rate(optimizer, epoch):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    if args.dataset.startswith('cifar'):
+    if args.dataset.startswith('cifar') or args.dataset.startswith('stl'):
         lr = args.lr * (0.1 ** (epoch // (args.epochs * 0.5))) * (0.1 ** (epoch // (args.epochs * 0.75)))
     elif args.dataset == ('imagenet'):
         if args.epochs == 300:
@@ -394,11 +431,11 @@ def accuracy(output, target, topk=(1,)):
 
     _, pred = output.topk(maxk, 1, True, True)
     pred = pred.t()
-    correct = pred.eq(target.view(1, -1).expand_as(pred))
+    correct = pred.eq(target.reshape(1, -1).expand_as(pred))
 
     res = []
     for k in topk:
-        correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+        correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
         wrong_k = batch_size - correct_k
         res.append(wrong_k.mul_(100.0 / batch_size))
 

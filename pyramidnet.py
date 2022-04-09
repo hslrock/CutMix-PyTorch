@@ -108,7 +108,7 @@ class PyramidNet(nn.Module):
     def __init__(self, dataset, depth, alpha, num_classes, bottleneck=False):
         super(PyramidNet, self).__init__()   	
         self.dataset = dataset
-        if self.dataset.startswith('cifar'):
+        if self.dataset.startswith('cifar') or self.dataset.startswith('stl'):
             self.inplanes = 16
             if bottleneck == True:
                 n = int((depth - 2) / 9)
@@ -131,7 +131,8 @@ class PyramidNet(nn.Module):
             self.final_featuremap_dim = self.input_featuremap_dim
             self.bn_final= nn.BatchNorm2d(self.final_featuremap_dim)
             self.relu_final = nn.ReLU(inplace=True)
-            self.avgpool = nn.AvgPool2d(8)
+            #self.avgpool = nn.AvgPool2d(8)
+            self.avgpool=nn.AdaptiveAvgPool2d((1,1))
             self.fc = nn.Linear(self.final_featuremap_dim, num_classes)
 
         elif dataset == 'imagenet':
@@ -195,7 +196,7 @@ class PyramidNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        if self.dataset == 'cifar10' or self.dataset == 'cifar100':
+        if self.dataset == 'cifar10' or self.dataset == 'cifar100' or self.dataset =='stl10':
             x = self.conv1(x)
             x = self.bn1(x)
             
